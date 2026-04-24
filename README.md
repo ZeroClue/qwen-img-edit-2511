@@ -1,3 +1,5 @@
+[![Runpod](https://api.runpod.io/badge/ZeroClue/qwen-img-edit-2511)](https://console.runpod.io/hub/ZeroClue/qwen-img-edit-2511) [![Sign Up](https://img.shields.io/badge/RunPod-Sign%20Up-blue)](https://runpod.io?ref=lnnwdl3q)
+
 # Qwen Image Edit 2511
 
 🚀 **AI image editing with enhanced consistency** - Edit images using text instructions with the Qwen-Image-Edit-2511 model. Supports single-image and multi-image editing with Lightning 4-step acceleration.
