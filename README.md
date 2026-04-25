@@ -13,8 +13,8 @@
 
 ## ⚡ Key Features
 
-- **4-Step Lightning Generation**: Fast editing with Lightning LoRA optimization
-- **Dual Mode**: 4-step Lightning (fast) or 40-step full quality via `steps` parameter
+- **Lightning Generation**: Fast editing with 4-step or 8-step Lightning LoRA optimization
+- **Flexible Steps**: Any positive step count — auto-selects 4-step LoRA (≤4), 8-step LoRA (5-8), or base model (>8)
 - **Multi-Image Input**: Up to 3 reference images for complex compositions
 - **Qwen Vision-Language**: Advanced understanding of edit instructions in Chinese/English
 - **Production Ready**: Optimized for RunPod Hub deployment
@@ -23,11 +23,12 @@
 
 | Metric | Value | Notes |
 |--------|-------|-------|
-| Edit Time (4-step) | 2-5 seconds | Lightning LoRA mode |
-| Edit Time (40-step) | 15-30 seconds | Full quality mode |
+| Edit Time (4-step) | 2-5 seconds | 4-step Lightning LoRA mode |
+| Edit Time (8-step) | 4-8 seconds | 8-step Lightning LoRA mode |
+| Edit Time (40-step) | 15-30 seconds | Full quality mode (no LoRA) |
 | Resolution | Source-dependent | Matches input image dimensions |
 | Memory Usage | ~16GB GPU | Efficient resource utilization |
-| Steps | 4 (Lightning) / 40 (full) | Switchable via API |
+| Steps | 4/8 (Lightning) / any (full) | Auto-selects LoRA via API |
 
 ## 🏗️ Architecture
 
@@ -35,11 +36,11 @@
 - **Base Model**: Qwen Image Edit 2511 (diffusion model, fp8mixed)
 - **Text Encoder**: Qwen 2.5 VL 7B (multilingual understanding)
 - **VAE**: Qwen Image VAE (efficient encoding/decoding)
-- **LoRA**: Qwen-Image-Edit-2511-Lightning-4steps (speed optimization)
+- **LoRA**: Qwen-Image-Edit-2511-Lightning-4steps-V1.0 and Qwen-Image-Edit-2511-Lightning-8steps-V1.0 (speed optimization)
 
 ### Pipeline Flow
 ```
-Source Image(s) + Edit Instruction → Qwen 2.5 VL Encoder → Qwen Image Edit 2511 + Lightning LoRA → 4-Step Sampling → VAE Decode → Edited Image
+Source Image(s) + Edit Instruction → Qwen 2.5 VL Encoder → Qwen Image Edit 2511 + Lightning LoRA → Sampling (4/8/N steps) → VAE Decode → Edited Image
 ```
 
 ## 🚀 Quick Start
@@ -117,8 +118,13 @@ payload = {
 | `image` | ✅ | — | Base64-encoded source image |
 | `reference_image` | ❌ | reuses source | Second image for multi-image edits |
 | `seed` | ❌ | random | Reproducibility seed |
-| `steps` | ❌ | 4 | 4=Lightning (fast), >4=full quality (40 steps) |
+| `steps` | ❌ | 4 | Inference steps (any positive int). Auto-selects LoRA: ≤4→4-step, 5-8→8-step, >8→base |
 | `negative_prompt` | ❌ | "" | What to avoid in editing |
+| `lora` | ❌ | auto | Override LoRA: `"4step"`, `"8step"`, `"none"`. Auto-detect from steps: ≤4→4-step, 5-8→8-step, >8→base |
+| `cfg` | ❌ | auto | CFG scale (auto: 1.0 for Lightning, 4.0 for base) |
+| `shift` | ❌ | 3.1 | ModelSamplingAuraFlow shift — increase if blurry/dark, decrease for more detail |
+| `sampler` | ❌ | `"euler"` | KSampler sampler name (e.g. `euler`, `res_multistep`) |
+| `scheduler` | ❌ | `"simple"` | KSampler scheduler name |
 
 ### Raw Workflow Mode
 For advanced users, pass a complete ComfyUI API-format workflow:
@@ -156,6 +162,7 @@ payload = {
 
 ### RunPod Serverless
 - **Per-Edit (4-step)**: ~$0.003-$0.006 per edit
+- **Per-Edit (8-step)**: ~$0.005-$0.010 per edit
 - **Per-Edit (40-step)**: ~$0.02-$0.04 per edit
 - **Pay-per-second**: Only pay for actual editing time
 - **Auto-scaling**: Zero cost when not in use
@@ -164,6 +171,7 @@ payload = {
 | Steps | Time/Edit | Cost/Edit | Monthly (1000 edits) |
 |-------|-----------|-----------|----------------------|
 | **4 (Lightning)** | 2-5s | $0.004 | $4.00 |
+| **8 (Lightning)** | 4-8s | $0.008 | $8.00 |
 | **40 (Full)** | 15-30s | $0.03 | $30.00 |
 
 ## 🔧 Configuration

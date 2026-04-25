@@ -16,6 +16,12 @@ import traceback
 import copy
 import random
 
+# LoRA filenames for the Edit-2511 model
+LORA_FILES = {
+    "4step": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+    "8step": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+}
+
 # Time to wait between API check attempts in milliseconds
 COMFY_API_AVAILABLE_INTERVAL_MS = 50
 # Maximum number of API check attempts
@@ -299,6 +305,30 @@ DEFAULT_WORKFLOW = {
 }
 
 
+def _resolve_lora_mode(steps, lora_param=None):
+    """Determine which LoRA to use based on steps and optional lora override.
+
+    Returns: (lora_key, use_lora, auto_cfg)
+        lora_key  - "4step", "8step", or None
+        use_lora  - bool, whether to enable the LoRA path via the switch
+        auto_cfg  - recommended CFG value (1.0 for Lightning, 4.0 for base)
+    """
+    if lora_param is not None:
+        lora_param = lora_param.lower().strip()
+        if lora_param == "none":
+            return None, False, 4.0
+        if lora_param in LORA_FILES:
+            return lora_param, True, 1.0
+        raise ValueError(
+            f"Invalid lora value '{lora_param}'. Must be '4step', '8step', or 'none'."
+        )
+    if steps <= 4:
+        return "4step", True, 1.0
+    if steps <= 8:
+        return "8step", True, 1.0
+    return None, False, 4.0
+
+
 def build_edit_workflow(
     prompt,
     source_image="source_image.png",
@@ -306,25 +336,15 @@ def build_edit_workflow(
     seed=None,
     steps=4,
     negative_prompt="",
+    lora=None,
+    cfg=None,
+    shift=3.1,
+    sampler="euler",
+    scheduler="simple",
 ):
-    """
-    Build a Qwen-Image-Edit-2511 workflow from simplified edit parameters.
+    lora_key, use_lora, auto_cfg = _resolve_lora_mode(steps, lora)
+    effective_cfg = cfg if cfg is not None else auto_cfg
 
-    Steps mode is controlled by a single switch:
-      steps <= 4  → Lightning 4-step mode (LoRA on, CFG=1)
-      steps > 4   → Full quality 40-step mode (LoRA off, CFG=4)
-
-    Args:
-        prompt (str): Edit instruction (e.g., "Change the background to a sunset beach")
-        source_image (str): Filename of the uploaded source image in ComfyUI
-        reference_image (str, optional): Filename of a second reference image for multi-image edits
-        seed (int, optional): Random seed. Generated randomly if not provided.
-        steps (int): 4 for Lightning (fast), 40 for full quality. Default 4.
-        negative_prompt (str): Negative prompt text. Default "".
-
-    Returns:
-        dict: Complete ComfyUI API-format workflow.
-    """
     workflow = copy.deepcopy(DEFAULT_WORKFLOW)
 
     # Source image
@@ -343,13 +363,20 @@ def build_edit_workflow(
     # Seed
     workflow["170:169"]["inputs"]["seed"] = seed if seed is not None else random.randint(0, 2**53)
 
-    # Steps mode switch: true = 4-step Lightning, false = 40-step full
-    use_lightning = steps <= 4
-    workflow["170:168"]["inputs"]["value"] = use_lightning
+    # Switch: true = Lightning LoRA, false = base model
+    workflow["170:168"]["inputs"]["value"] = use_lora
 
-    # Override step count for full mode if user specifies a non-standard value
-    if not use_lightning:
-        workflow["170:166"]["inputs"]["value"] = steps
+    if use_lora and lora_key:
+        workflow["170:153"]["inputs"]["lora_name"] = LORA_FILES[lora_key]
+
+    # Override KSampler inputs directly (bypass switch links)
+    workflow["170:169"]["inputs"]["steps"] = steps
+    workflow["170:169"]["inputs"]["cfg"] = effective_cfg
+    workflow["170:169"]["inputs"]["sampler_name"] = sampler
+    workflow["170:169"]["inputs"]["scheduler"] = scheduler
+
+    # Shift (ModelSamplingAuraFlow)
+    workflow["170:145"]["inputs"]["shift"] = shift
 
     return workflow
 
@@ -364,11 +391,13 @@ def validate_input(job_input):
        - prompt (str, required): Edit instruction text
        - image (str, required): Base64-encoded source image or image name already uploaded
        - seed (int, optional): Random seed
-       - width (int, optional): Output width, default 1328
-       - height (int, optional): Output height, default 1328
-       - steps (int, optional): Inference steps, default 40
-       - negative_prompt (str, optional): Default " "
-       - guidance_scale (float, optional): CFG scale, default 4.0
+       - steps (int, optional): Inference steps, default 4
+       - negative_prompt (str, optional): Default ""
+       - lora (str, optional): Override LoRA: "4step", "8step", "none"
+       - cfg (float, optional): CFG scale (auto: 1.0 for Lightning, 4.0 for base)
+       - shift (float, optional): ModelSamplingAuraFlow shift, default 3.1
+       - sampler (str, optional): KSampler sampler, default "euler"
+       - scheduler (str, optional): KSampler scheduler, default "simple"
 
     Args:
         job_input (dict): The input data to validate.
@@ -400,6 +429,33 @@ def validate_input(job_input):
         if not source_image:
             return None, "'image' is required when using simplified edit mode. Provide a base64-encoded image."
 
+        # Validate new params
+        _lora_val = job_input.get("lora")
+        if _lora_val is not None:
+            _lora_val = str(_lora_val).lower().strip()
+            if _lora_val not in ("4step", "8step", "none"):
+                return None, "'lora' must be '4step', '8step', or 'none'"
+
+        _steps_val = job_input.get("steps", 4)
+        if not isinstance(_steps_val, int) or _steps_val < 1:
+            return None, "'steps' must be a positive integer"
+
+        _cfg_val = job_input.get("cfg")
+        if _cfg_val is not None and (not isinstance(_cfg_val, (int, float)) or _cfg_val < 0):
+            return None, "'cfg' must be a non-negative number"
+
+        _shift_val = job_input.get("shift")
+        if _shift_val is not None and (not isinstance(_shift_val, (int, float)) or _shift_val <= 0):
+            return None, "'shift' must be a positive number"
+
+        _sampler_val = job_input.get("sampler", "euler")
+        if not isinstance(_sampler_val, str) or not _sampler_val.strip():
+            return None, "'sampler' must be a non-empty string"
+
+        _scheduler_val = job_input.get("scheduler", "simple")
+        if not isinstance(_scheduler_val, str) or not _scheduler_val.strip():
+            return None, "'scheduler' must be a non-empty string"
+
         # Prepare images for upload
         images = []
         source_image_name = job_input.get("image_name", "source_image.png")
@@ -427,8 +483,13 @@ def validate_input(job_input):
             source_image=source_ref,
             reference_image=reference_ref,
             seed=job_input.get("seed"),
-            steps=job_input.get("steps", 4),
+            steps=_steps_val,
             negative_prompt=job_input.get("negative_prompt", ""),
+            lora=_lora_val,
+            cfg=_cfg_val,
+            shift=_shift_val if _shift_val is not None else 3.1,
+            sampler=_sampler_val,
+            scheduler=_scheduler_val,
         )
         # Carry the images for upload
         if images:
@@ -616,6 +677,13 @@ QWEN_MODELS = {
         "relative_path": "loras",
         "filename": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
         "name": "Qwen Edit Lightning 4-step LoRA",
+        "type": "loras"
+    },
+    "loras/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors": {
+        "url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+        "relative_path": "loras",
+        "filename": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors",
+        "name": "Qwen Edit Lightning 8-step LoRA",
         "type": "loras"
     }
 }

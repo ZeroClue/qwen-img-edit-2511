@@ -4,6 +4,9 @@
     "image": "base64_encoded_source_image_data_here",
     "seed": 42,
     "steps": 4,
-    "negative_prompt": ""
+    "negative_prompt": "",
+    "shift": 3.1,
+    "sampler": "euler",
+    "scheduler": "simple"
   }
 }
